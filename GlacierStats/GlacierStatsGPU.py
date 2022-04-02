@@ -1,21 +1,38 @@
 #!/usr/bin/env python
-# coding: utf-8
 
-# geostatistical tools
-
-
+from concurrent.futures import ProcessPoolExecutor
+from time import time
+from functools import wraps
 import numpy as np
 import numpy.linalg as linalg
 import pandas as pd
 import sklearn as sklearn
 from sklearn.neighbors import KDTree
 import math
-from scipy.spatial import distance_matrix
+
 from tqdm import tqdm
 import random
 
+import cupy as cp
+import cudf
+from numba import cuda
+
+executor = ProcessPoolExecutor(4)
+
+
+def timeer(func):
+    @wraps(func)
+    def wrap(*args, **kw):
+        start = time()
+        result = func(*args, **kw)
+        end = time()
+        print(f"Timer,{func.__name__},{(end-start)}")
+        return result
+    return wrap
 
 # covariance function definition
+
+
 def covar(t, d, r):
     h = d / r
     if t == 1:  # Spherical
@@ -36,11 +53,11 @@ def formatQuadrant(q, loc):
     return np.append(q, dist, axis=1)
 
 
-def sortQuadrantPoints(quad_array, q, quad_count, rad, loc):
-    quad = quad_array[q][:, [0, 1]]
+def sortQuadrantPoints(quad_array, quad_count, rad, loc):
+    quad = quad_array[:, :2]
     np.asarray(quad)
     quad = formatQuadrant(quad, loc)
-    quad = np.insert(quad, 3, quad_array[q][:, -1], axis=1)
+    quad = np.insert(quad, 3, quad_array[:, -1], axis=1)
     # sort array by smallest distance values
     quad = quad[np.argsort(quad[:, 2])]
     # select the number of points in each quadrant up to our quadrant count
@@ -57,8 +74,9 @@ def nearestNeighborSearch(rad, count, loc, data):
     locy = loc[1]
 
     # wipe coords for re-usability
-    coords = np.empty_like(data)
-    coords[:] = data
+
+    coords = np.copy(data)
+
     # standardize our quadrants (create the origin at our location point)
     coords[:, 0] -= locx
     coords[:, 1] -= locy
@@ -71,18 +89,20 @@ def nearestNeighborSearch(rad, count, loc, data):
     final_quad.append(coords[(coords[:, 0] >= 0) & (coords[:, 1] >= 0)])
     final_quad.append(coords[(coords[:, 0] < 0) & (coords[:, 1] < 0)])
     final_quad.append(coords[(coords[:, 0] >= 0) & (coords[:, 1] < 0)])
-    final_quad.append(coords[(coords[:, 0] < 0) & (coords[:, 1] < 0)])
+    final_quad.append(coords[(coords[:, 0] < 0) & (coords[:, 1] >= 0)])
 
     # Gather distance values for each coord from point and delete points outside radius
-    f1 = sortQuadrantPoints(final_quad, 0, quad_count, rad, np.array((0, 0)))
-    f2 = sortQuadrantPoints(final_quad, 1, quad_count, rad, np.array((0, 0)))
-    f3 = sortQuadrantPoints(final_quad, 2, quad_count, rad, np.array((0, 0)))
-    f4 = sortQuadrantPoints(final_quad, 3, quad_count, rad, np.array((0, 0)))
+    # Use executor to submit function
+    fs = [executor.submit(sortQuadrantPoints, fquad, quad_count, rad, np.array((0, 0))) for fquad in final_quad]
+
+    # Get results back
+    final_fs = [f.result() for f in fs]
 
     # add all quadrants back together for final dataset
-    near = np.concatenate((f1, f2))
-    near = np.concatenate((near, f3))
-    near = np.concatenate((near, f4))
+    # TODO: Hstack or vstack????
+    near = np.concatenate((final_fs[0], final_fs[1]))
+    near = np.concatenate((near, final_fs[2]))
+    near = np.concatenate((near, final_fs[3]))
     # unstandardize data back to original form
     near[:, 0] += locx
     near[:, 1] += locy
@@ -117,6 +137,7 @@ def axis_var(lagh, nug, nstruct, cc, vtype, a):
 
 
 # make array of x,y coordinates based on corners and resolution
+@timeer
 def pred_grid(xmin, xmax, ymin, ymax, pix):
     cols = np.rint((xmax - xmin)/pix)
     rows = np.rint((ymax - ymin)/pix)  # number of rows and columns
@@ -147,6 +168,111 @@ def Rot_Mat(Azimuth, a_max, a_min):
         ),
     )
     return Rot_Mat
+
+
+########### Taken from scipy code to convert to cupy ###########
+def minkowski_distance_p(x, y, p=2):
+    """Compute the pth power of the L**p distance between two arrays.
+    For efficiency, this function computes the L**p distance but does
+    not extract the pth root. If `p` is 1 or infinity, this is equal to
+    the actual L**p distance.
+    Parameters
+    ----------
+    x : (M, K) array_like
+        Input array.
+    y : (N, K) array_like
+        Input array.
+    p : float, 1 <= p <= infinity
+        Which Minkowski p-norm to use.
+    Examples
+    --------
+    >>> from scipy.spatial import minkowski_distance_p
+    >>> minkowski_distance_p([[0,0],[0,0]], [[1,1],[0,1]])
+    array([2, 1])
+    """
+    x = cp.asarray(x)
+    y = cp.asarray(y)
+
+    if p == cp.inf:
+        return cp.amax(cp.abs(y-x), axis=-1)
+    elif p == 1:
+        return cp.sum(cp.abs(y-x), axis=-1)
+    else:
+        return cp.sum(cp.abs(y-x)**p, axis=-1)
+
+
+def minkowski_distance(x, y, p=2):
+    """Compute the L**p distance between two arrays.
+    Parameters
+    ----------
+    x : (M, K) array_like
+        Input array.
+    y : (N, K) array_like
+        Input array.
+    p : float, 1 <= p <= infinity
+        Which Minkowski p-norm to use.
+    Examples
+    --------
+    >>> from scipy.spatial import minkowski_distance
+    >>> minkowski_distance([[0,0],[0,0]], [[1,1],[0,1]])
+    array([ 1.41421356,  1.        ])
+    """
+    x = cp.asarray(x)
+    y = cp.asarray(y)
+    if p == cp.inf or p == 1:
+        return minkowski_distance_p(x, y, p)
+    else:
+        return minkowski_distance_p(x, y, p)**(1./p)
+
+
+def distance_matrix(x, y, p=2, threshold=1000000):
+    """Compute the distance matrix.
+    Returns the matrix of all pair-wise distances.
+    Parameters
+    ----------
+    x : (M, K) array_like
+        Matrix of M vectors in K dimensions.
+    y : (N, K) array_like
+        Matrix of N vectors in K dimensions.
+    p : float, 1 <= p <= infinity
+        Which Minkowski p-norm to use.
+    threshold : positive int
+        If ``M * N * K`` > `threshold`, algorithm uses a Python loop instead
+        of large temporary arrays.
+    Returns
+    -------
+    result : (M, N) ndarray
+        Matrix containing the distance from every vector in `x` to every vector
+        in `y`.
+    Examples
+    --------
+    >>> from scipy.spatial import distance_matrix
+    >>> distance_matrix([[0,0],[0,1]], [[1,0],[1,1]])
+    array([[ 1.        ,  1.41421356],
+           [ 1.41421356,  1.        ]])
+    """
+
+    x = cp.asarray(x)
+    m, k = x.shape
+    y = cp.asarray(y)
+    n, kk = y.shape
+
+    if k != kk:
+        raise ValueError("x contains %d-dimensional vectors but y contains %d-dimensional vectors" % (k, kk))
+
+    if m*n*k <= threshold:
+        result = minkowski_distance(x[:, np.newaxis, :], y[np.newaxis, :, :], p)
+    else:
+        result = cp.empty((m, n), dtype=cp.float32)  # FIXME: figure out the best dtype
+        if m < n:
+            for i in range(m):
+                result[i, :] = minkowski_distance(x[i], y, p)
+        else:
+            for j in range(n):
+                result[:, j] = minkowski_distance(x, y[j], p)
+
+    return cp.asnumpy(result)
+########### Taken from scipy code to convert to cupy ###########
 
 
 # covariance model
@@ -331,55 +457,54 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
     # preallocate space for simulation
     sgs = np.zeros(shape=len(Pred_grid))
 
-    with tqdm(total=len(Pred_grid), position=0, leave=True) as pbar:
-        for i in tqdm(range(0, len(Pred_grid)), position=0, leave=True):
-            pbar.update()
-            z = xyindex[i]
+    for i in tqdm(range(0, len(Pred_grid)), position=0, leave=True):
+        z = xyindex[i]
 
-            # convert data to numpy array for faster speeds/parsing
-            npdata = df[['X', 'Y', 'Nbed']].to_numpy()
-            # gather nearby points
-            nearest = nearestNeighborSearch(rad, k, Pred_grid[z], npdata)
+        # convert data to numpy array for faster speeds/parsing
+        npdata = df[['X', 'Y', 'Nbed']].to_numpy()
 
-            # store bed elevation values in new array
-            norm_bed_val = nearest[:, -1]
-            norm_bed_val = norm_bed_val.reshape(len(norm_bed_val), 1)
-            norm_bed_val = norm_bed_val.T
-            # store X,Y pair values in new array
-            xy_val = nearest[:, :-1]
+        # gather nearby points
+        nearest = nearestNeighborSearch(rad, k, Pred_grid[z], npdata)
 
-            # update K to reflect the amount of K values we got back from quadrant search
-            new_k = len(nearest)
+        # store bed elevation values in new array
+        norm_bed_val = nearest[:, -1]
+        norm_bed_val = norm_bed_val.reshape(-1, 1)
+        norm_bed_val = norm_bed_val.T
+        # store X,Y pair values in new array
+        xy_val = nearest[:, :-1]
 
-            # left hand side (covariance between data)
-            Kriging_Matrix = np.zeros(shape=((new_k+1, new_k+1)))
-            Kriging_Matrix[0:new_k, 0:new_k] = cov(xy_val, xy_val, 0, vario)
-            Kriging_Matrix[new_k, 0:new_k] = 1
-            Kriging_Matrix[0:new_k, new_k] = 1
+        # update K to reflect the amount of K values we got back from quadrant search
+        new_k = len(nearest)
 
-            # Set up Right Hand Side (covariance between data and unknown)
-            r = np.zeros(shape=(new_k+1))
-            k_weights = r
-            r[0:new_k] = cov(xy_val, np.tile(Pred_grid[z], (new_k, 1)), 1, vario)
-            r[new_k] = 1  # unbiasedness constraint
-            Kriging_Matrix.reshape(((new_k+1)), ((new_k+1)))
+        # left hand side (covariance between data)
+        Kriging_Matrix = np.zeros(shape=((new_k+1, new_k+1)))
+        Kriging_Matrix[0:new_k, 0:new_k] = cov(xy_val, xy_val, 0, vario)
+        Kriging_Matrix[new_k, 0:new_k] = 1
+        Kriging_Matrix[0:new_k, new_k] = 1
 
-            # Calculate Kriging Weights
-            k_weights = np.dot(np.linalg.pinv(Kriging_Matrix), r)
+        # Set up Right Hand Side (covariance between data and unknown)
+        r = np.zeros(shape=(new_k+1))
+        k_weights = r
+        r[0:new_k] = cov(xy_val, np.tile(Pred_grid[z], (new_k, 1)), 1, vario)
+        r[new_k] = 1  # unbiasedness constraint
+        Kriging_Matrix.reshape(((new_k+1)), ((new_k+1)))
 
-            # get estimates
-            est = np.sum(k_weights[0:new_k]*norm_bed_val[:])  # kriging mean
-            var = Var_1 - np.sum(k_weights[0:new_k]*r[0:new_k])  # kriging variance
+        # Calculate Kriging Weights
+        k_weights = np.dot(np.linalg.pinv(Kriging_Matrix), r)
 
-            if (var < 0):  # make sure variances are non-negative
-                var = 0
+        # get estimates
+        est = np.sum(k_weights[0:new_k]*norm_bed_val[:])  # kriging mean
+        var = Var_1 - np.sum(k_weights[0:new_k]*r[0:new_k])  # kriging variance
 
-            sgs[z] = np.random.normal(est, math.sqrt(var), 1)  # simulate by randomly sampling a value
+        if (var < 0):  # make sure variances are non-negative
+            var = 0
 
-            # update the conditioning data
-            coords = Pred_grid[z:z+1, :]
-            dnew = {xx: [coords[0, 0]], yy: [coords[0, 1]], data: [sgs[z]]}
-            dfnew = pd.DataFrame(data=dnew)
-            df = pd.concat([df, dfnew], sort=False)  # add new points by concatenating dataframes
+        sgs[z] = np.random.normal(est, math.sqrt(var), 1)  # simulate by randomly sampling a value
+
+        # update the conditioning data
+        coords = Pred_grid[z:z+1, :]
+        dnew = {xx: [coords[0, 0]], yy: [coords[0, 1]], data: [sgs[z]]}
+        dfnew = pd.DataFrame(data=dnew)
+        df = pd.concat([df, dfnew], sort=False)  # add new points by concatenating dataframes
 
     return sgs
