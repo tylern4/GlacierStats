@@ -36,36 +36,36 @@ def timeer(func):
 def covar(t, d, r):
     h = d / r
     if t == 1:  # Spherical
-        c = 1 - h * (1.5 - 0.5 * np.square(h))
+        c = 1 - h * (1.5 - 0.5 * cp.square(h))
         c[h > 1] = 0
     elif t == 2:  # Exponential
-        c = np.exp(-3 * h)
+        c = cp.exp(-3 * h)
     elif t == 3:  # Gaussian
-        c = np.exp(-3 * np.square(h))
+        c = cp.exp(-3 * cp.square(h))
     return c
 
 
 def formatQuadrant(q, loc):
     # calculate distances of points from location
-    dist = np.linalg.norm(q - loc, axis=1)
+    dist = cp.linalg.norm(q - loc, axis=1)
     # transpose vector to add it to our data matrix
     dist = dist.reshape(len(dist), 1)
-    return np.append(q, dist, axis=1)
+    return cp.append(q, dist, axis=1)
 
 
 def sortQuadrantPoints(quad_array, quad_count, rad, loc):
     quad = quad_array[:, :2]
-    np.asarray(quad)
+    cp.asarray(quad)
     quad = formatQuadrant(quad, loc)
-    quad = np.insert(quad, 3, quad_array[:, -1], axis=1)
+    quad = cp.insert(quad, 3, quad_array[:, -1], axis=1)
     # sort array by smallest distance values
-    quad = quad[np.argsort(quad[:, 2])]
+    quad = quad[cp.argsort(quad[:, 2])]
     # select the number of points in each quadrant up to our quadrant count
     smallest = quad[:quad_count]
     # delete points outside of our radius
-    smallest = np.delete(smallest, np.where((smallest[:, 2] > rad))[0], 0)
+    smallest = cp.delete(smallest, cp.where((smallest[:, 2] > rad))[0], 0)
     # delete extra column of distance from origin data
-    smallest = np.delete(smallest, 2, 1)
+    smallest = cp.delete(smallest, 2, 1)
     return smallest
 
 
@@ -75,8 +75,9 @@ def nearestNeighborSearch(rad, count, loc, data):
 
     # wipe coords for re-usability
 
-    coords = np.copy(data)
-
+    # coords = cp.copy(data)
+    coords = cp.asarray(data)
+    print(type(coords), type(locx), type(locy))
     # standardize our quadrants (create the origin at our location point)
     coords[:, 0] -= locx
     coords[:, 1] -= locy
@@ -93,16 +94,17 @@ def nearestNeighborSearch(rad, count, loc, data):
 
     # Gather distance values for each coord from point and delete points outside radius
     # Use executor to submit function
-    fs = [executor.submit(sortQuadrantPoints, fquad, quad_count, rad, np.array((0, 0))) for fquad in final_quad]
+    final_fs = [sortQuadrantPoints(fquad, quad_count, rad, cp.array((0, 0))) for fquad in final_quad]
+    ### fs = [executor.submit(sortQuadrantPoints, fquad, quad_count, rad, cp.array((0, 0))) for fquad in final_quad]
 
     # Get results back
-    final_fs = [f.result() for f in fs]
+    ### final_fs = [f.result() for f in fs]
 
     # add all quadrants back together for final dataset
     # TODO: Hstack or vstack????
-    near = np.concatenate((final_fs[0], final_fs[1]))
-    near = np.concatenate((near, final_fs[2]))
-    near = np.concatenate((near, final_fs[3]))
+    near = cp.concatenate((final_fs[0], final_fs[1]))
+    near = cp.concatenate((near, final_fs[2]))
+    near = cp.concatenate((near, final_fs[3]))
     # unstandardize data back to original form
     near[:, 0] += locx
     near[:, 1] += locy
@@ -118,13 +120,13 @@ def axis_var(lagh, nug, nstruct, cc, vtype, a):
     cc = cc  # contribution of each structure
 
     n = len(lagh)
-    gamma_model = np.zeros(shape=(n))
+    gamma_model = cp.zeros(shape=(n))
 
     # for each lag distance
     for j in range(0, n):
         c = nug
         c = 0
-        h = np.matrix(lagh[j])
+        h = cp.matrix(lagh[j])
 
         # for each structure in the variogram
         for i in range(nstruct):
@@ -139,38 +141,37 @@ def axis_var(lagh, nug, nstruct, cc, vtype, a):
 # make array of x,y coordinates based on corners and resolution
 @timeer
 def pred_grid(xmin, xmax, ymin, ymax, pix):
-    cols = np.rint((xmax - xmin)/pix)
-    rows = np.rint((ymax - ymin)/pix)  # number of rows and columns
-    x = np.arange(xmin, xmax, pix)
-    y = np.arange(ymin, ymax, pix)  # make arrays
+    cols = cp.rint((xmax - xmin)/pix)
+    rows = cp.rint((ymax - ymin)/pix)  # number of rows and columns
+    x = cp.arange(xmin, xmax, pix)
+    y = cp.arange(ymin, ymax, pix)  # make arrays
 
-    xx, yy = np.meshgrid(x, y)  # make grid
-    yy = np.flip(yy)  # flip upside down
+    xx, yy = cp.meshgrid(x, y)  # make grid
+    yy = cp.flip(yy)  # flip upside down
 
     # shape into array
-    x = np.reshape(xx, (int(rows)*int(cols), 1))
-    y = np.reshape(yy, (int(rows)*int(cols), 1))
+    x = cp.reshape(xx, (int(rows)*int(cols), 1))
+    y = cp.reshape(yy, (int(rows)*int(cols), 1))
 
-    Pred_grid_xy = np.concatenate((x, y), axis=1)  # combine coordinates
+    Pred_grid_xy = cp.concatenate((x, y), axis=1)  # combine coordinates
     return Pred_grid_xy
 
 
 # rotation matrix (Azimuth = major axis direction)
 def Rot_Mat(Azimuth, a_max, a_min):
-    theta = (Azimuth / 180.0) * np.pi
-    Rot_Mat = np.dot(
-        np.array([[1 / a_max, 0], [0, 1 / a_min]]),
-        np.array(
+    theta = (Azimuth / 180.0) * cp.pi
+    Rot_Mat = cp.dot(
+        cp.array([[1 / a_max, 0], [0, 1 / a_min]]),
+        cp.array(
             [
-                [np.cos(theta), np.sin(theta)],
-                [-np.sin(theta), np.cos(theta)],
+                [cp.cos(theta), cp.sin(theta)],
+                [-cp.sin(theta), cp.cos(theta)],
             ]
         ),
     )
     return Rot_Mat
 
 
-########### Taken from scipy code to convert to cupy ###########
 def minkowski_distance_p(x, y, p=2):
     """Compute the pth power of the L**p distance between two arrays.
     For efficiency, this function computes the L**p distance but does
@@ -261,7 +262,7 @@ def distance_matrix(x, y, p=2, threshold=1000000):
         raise ValueError("x contains %d-dimensional vectors but y contains %d-dimensional vectors" % (k, kk))
 
     if m*n*k <= threshold:
-        result = minkowski_distance(x[:, np.newaxis, :], y[np.newaxis, :, :], p)
+        result = minkowski_distance(x[:, cp.newaxis, :], y[cp.newaxis, :, :], p)
     else:
         result = cp.empty((m, n), dtype=cp.float32)  # FIXME: figure out the best dtype
         if m < n:
@@ -272,10 +273,10 @@ def distance_matrix(x, y, p=2, threshold=1000000):
                 result[:, j] = minkowski_distance(x, y[j], p)
 
     return cp.asnumpy(result)
-########### Taken from scipy code to convert to cupy ###########
-
 
 # covariance model
+
+
 def cov(h1, h2, k, vario):
     # unpack variogram parameters
     Azimuth = vario[0]
@@ -294,18 +295,18 @@ def cov(h1, h2, k, vario):
         # covariances between measurements
         if k == 0:
             d = distance_matrix(
-                np.matmul(Q1, Rot_Mat(Azimuth, a_max[i], a_min[i])),
-                np.matmul(Q2, Rot_Mat(Azimuth, a_max[i], a_min[i])),
+                cp.matmul(Q1, Rot_Mat(Azimuth, a_max[i], a_min[i])),
+                cp.matmul(Q2, Rot_Mat(Azimuth, a_max[i], a_min[i])),
             )
 
         # covariances between measurements and unknown
         elif k == 1:
-            d = np.sqrt(
-                np.square(
-                    (np.matmul(Q1, Rot_Mat(Azimuth, a_max[i], a_min[i])))
-                    - np.tile(
+            d = cp.sqrt(
+                cp.square(
+                    (cp.matmul(Q1, Rot_Mat(Azimuth, a_max[i], a_min[i])))
+                    - cp.tile(
                         (
-                            np.matmul(
+                            cp.matmul(
                                 Q2, Rot_Mat(Azimuth, a_max[i], a_min[i])
                             )
                         ),
@@ -313,7 +314,7 @@ def cov(h1, h2, k, vario):
                     )
                 ).sum(axis=1)
             )
-            d = np.asarray(d).reshape(len(d))
+            d = cp.asarray(d).reshape(len(d))
         c = c + covar(vtype[i], d, 1) * cc[i]
     return c
 
@@ -336,15 +337,16 @@ def skrige(Pred_grid, df, xx, yy, data, k, vario, rad):
     :vario: variogram parameters describing the spatial statistics
     """
 
-    Mean_1 = np.average(df[data])  # mean of input data
-    Var_1 = np.var(df[data])  # variance of input data
+    Mean_1 = cp.average(df[data])  # mean of input data
+    Var_1 = cp.var(df[data])  # variance of input data
 
     # preallocate space for mean and variance
-    est_SK = np.zeros(shape=len(Pred_grid))  # make zeros array the size of the prediction grid
-    var_SK = np.zeros(shape=len(Pred_grid))
+    est_SK = cp.zeros(shape=len(Pred_grid))  # make zeros array the size of the prediction grid
+    var_SK = cp.zeros(shape=len(Pred_grid))
 
     # convert dataframe to numpy array for faster matrix operations
     npdata = df[['X', 'Y', 'Nbed']].to_numpy()
+    npdata = cp.asarray(npdata)
 
     # for each coordinate in the prediction grid
     for z in tqdm(range(0, len(Pred_grid))):
@@ -359,17 +361,17 @@ def skrige(Pred_grid, df, xx, yy, data, k, vario, rad):
 
         # calculate new_k value relative to count of near points within radius
         new_k = len(nearest)
-        Kriging_Matrix = np.zeros(shape=((new_k, new_k)))
+        Kriging_Matrix = cp.zeros(shape=((new_k, new_k)))
         Kriging_Matrix = cov(xy_val, xy_val, 0, vario)
 
-        r = np.zeros(shape=(new_k))
+        r = cp.zeros(shape=(new_k))
         k_weights = r
-        r = cov(xy_val, np.tile(Pred_grid[z], (new_k, 1)), 1, vario)
+        r = cov(xy_val, cp.tile(Pred_grid[z], (new_k, 1)), 1, vario)
         Kriging_Matrix.reshape(((new_k)), ((new_k)))
 
-        k_weights = np.dot(np.linalg.pinv(Kriging_Matrix), r)
-        est_SK[z] = new_k*Mean_1 + (np.sum(k_weights*(norm_bed_val[:] - Mean_1)))
-        var_SK[z] = (Var_1 - np.sum(k_weights*r))
+        k_weights = cp.dot(cp.linalg.pinv(Kriging_Matrix), r)
+        est_SK[z] = new_k*Mean_1 + (cp.sum(k_weights*(norm_bed_val[:] - Mean_1)))
+        var_SK[z] = (Var_1 - cp.sum(k_weights*r))
 
     return est_SK, var_SK
 
@@ -391,11 +393,11 @@ def okrige(Pred_grid, df, xx, yy, data, k, vario, rad):
     :vario: variogram parameters describing the spatial statistics
     """
 
-    Var_1 = np.var(df[data])  # variance of data
+    Var_1 = cp.var(df[data])  # variance of data
 
     # preallocate space for mean and variance
-    est_OK = np.zeros(shape=len(Pred_grid))
-    var_OK = np.zeros(shape=len(Pred_grid))
+    est_OK = cp.zeros(shape=len(Pred_grid))
+    var_OK = cp.zeros(shape=len(Pred_grid))
 
     # convert dataframe to numpy matrix for faster operations
     npdata = df[['X', 'Y', 'Nbed']].to_numpy()
@@ -414,24 +416,24 @@ def okrige(Pred_grid, df, xx, yy, data, k, vario, rad):
         new_k = len(nearest)
 
         # left hand side (covariance between data)
-        Kriging_Matrix = np.zeros(shape=((new_k+1, new_k+1)))
+        Kriging_Matrix = cp.zeros(shape=((new_k+1, new_k+1)))
         Kriging_Matrix[0:new_k, 0:new_k] = cov(xy_val, xy_val, 0, vario)
         Kriging_Matrix[new_k, 0:new_k] = 1
         Kriging_Matrix[0:new_k, new_k] = 1
 
         # Set up Right Hand Side (covariance between data and unknown)
-        r = np.zeros(shape=(new_k+1))
+        r = cp.zeros(shape=(new_k+1))
         k_weights = r
-        r[0:new_k] = cov(xy_val, np.tile(Pred_grid[z], (new_k, 1)), 1, vario)
+        r[0:new_k] = cov(xy_val, cp.tile(Pred_grid[z], (new_k, 1)), 1, vario)
         r[new_k] = 1  # unbiasedness constraint
         Kriging_Matrix.reshape(((new_k+1)), ((new_k+1)))
 
         # Calculate Kriging Weights
-        k_weights = np.dot(np.linalg.pinv(Kriging_Matrix), r)
+        k_weights = cp.dot(cp.linalg.pinv(Kriging_Matrix), r)
 
         # get estimates
-        est_OK[z] = np.sum(k_weights[0:new_k]*norm_bed_val[:])
-        var_OK[z] = Var_1 - np.sum(k_weights[0:new_k]*r[0:new_k])
+        est_OK[z] = cp.sum(k_weights[0:new_k]*norm_bed_val[:])
+        var_OK[z] = Var_1 - cp.sum(k_weights[0:new_k]*r[0:new_k])
 
     return est_OK, var_OK
 
@@ -449,13 +451,13 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
     """
 
     # generate random array for simulation order
-    xyindex = np.arange(len(Pred_grid))
+    xyindex = cp.arange(len(Pred_grid))
     random.shuffle(xyindex)
 
-    Var_1 = np.var(df[data])  # variance of data
+    Var_1 = cp.var(df[data])  # variance of data
 
     # preallocate space for simulation
-    sgs = np.zeros(shape=len(Pred_grid))
+    sgs = cp.zeros(shape=len(Pred_grid))
 
     for i in tqdm(range(0, len(Pred_grid)), position=0, leave=True):
         z = xyindex[i]
@@ -477,29 +479,29 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
         new_k = len(nearest)
 
         # left hand side (covariance between data)
-        Kriging_Matrix = np.zeros(shape=((new_k+1, new_k+1)))
+        Kriging_Matrix = cp.zeros(shape=((new_k+1, new_k+1)))
         Kriging_Matrix[0:new_k, 0:new_k] = cov(xy_val, xy_val, 0, vario)
         Kriging_Matrix[new_k, 0:new_k] = 1
         Kriging_Matrix[0:new_k, new_k] = 1
 
         # Set up Right Hand Side (covariance between data and unknown)
-        r = np.zeros(shape=(new_k+1))
+        r = cp.zeros(shape=(new_k+1))
         k_weights = r
-        r[0:new_k] = cov(xy_val, np.tile(Pred_grid[z], (new_k, 1)), 1, vario)
+        r[0:new_k] = cov(xy_val, cp.tile(Pred_grid[z], (new_k, 1)), 1, vario)
         r[new_k] = 1  # unbiasedness constraint
         Kriging_Matrix.reshape(((new_k+1)), ((new_k+1)))
 
         # Calculate Kriging Weights
-        k_weights = np.dot(np.linalg.pinv(Kriging_Matrix), r)
+        k_weights = cp.dot(cp.linalg.pinv(Kriging_Matrix), r)
 
         # get estimates
-        est = np.sum(k_weights[0:new_k]*norm_bed_val[:])  # kriging mean
-        var = Var_1 - np.sum(k_weights[0:new_k]*r[0:new_k])  # kriging variance
+        est = cp.sum(k_weights[0:new_k]*norm_bed_val[:])  # kriging mean
+        var = Var_1 - cp.sum(k_weights[0:new_k]*r[0:new_k])  # kriging variance
 
         if (var < 0):  # make sure variances are non-negative
             var = 0
 
-        sgs[z] = np.random.normal(est, math.sqrt(var), 1)  # simulate by randomly sampling a value
+        sgs[z] = cp.random.normal(est, math.sqrt(var), 1)  # simulate by randomly sampling a value
 
         # update the conditioning data
         coords = Pred_grid[z:z+1, :]
