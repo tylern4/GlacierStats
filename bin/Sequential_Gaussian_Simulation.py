@@ -36,7 +36,7 @@ def main(data_path):
     # In[2]:
 
 
-    df_bed_gpu = cudf.read_csv(data_path) # download data
+    df_bed_gpu = cudf.read_csv(data_path, dtype=cp.float32) # download data
     df_bed = df_bed_gpu.to_pandas() # cpu version
     #../Data/Nioghalvfjerds_bed_data.csv
     # remove outliers with LOF method
@@ -53,7 +53,7 @@ def main(data_path):
 
 
     df_bed['Nbed'], tvbed, tnsbed = geostats.nscore(df_bed,'Bed')  # normal score transformation
-    df_bed_gpu['Nbed'] = df_bed['Nbed']
+    df_bed_gpu['Nbed'] = cp.float32(df_bed['Nbed'])
 
     print('running on gpu')
     # ## Set variogram parameters
@@ -100,7 +100,7 @@ def main(data_path):
     k = 50 # number of neighboring data points used to estimate a given point 
     rad = 10000 # 10 km search radius
     sgs = gs.sgsim(Pred_grid_xy, df_samp_gpu, 'X', 'Y', 'Nbed', k, vario, rad) # simulate
-
+    exit(1)
     print(type(sgs))
 
     # Reverse normal score transformation

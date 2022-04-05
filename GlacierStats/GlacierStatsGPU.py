@@ -12,6 +12,20 @@
 import cupy as cp
 import cudf
 from cuml.metrics import pairwise_distances
+
+import rmm
+pool = rmm.mr.PoolMemoryResource(rmm.mr.CudaMemoryResource(), initial_pool_size=2**34, maximum_pool_size=2**35)
+rmm.mr.set_current_device_resource(pool)
+
+#import cupy_backends.cuda.libs.cublas
+#from cupy.cuda import device
+#handle = device.get_cublas_handle()
+#compute_stream = cp.cuda.stream.Stream(non_blocking=True)
+#cupy_backends.cuda.libs.cublas.setStream(handle, compute_stream.ptr)
+
+import nvtx
+
+
 import numpy as np
 import numpy.linalg as linalg
 import pandas as pd
@@ -22,7 +36,6 @@ from scipy.spatial import distance_matrix
 from tqdm import tqdm
 import random
 
-
 # In[4]:
 
 def helloworld():
@@ -30,6 +43,7 @@ def helloworld():
 
 
 # covariance function definition
+@nvtx.annotate("covar()", color="purple")
 def covar(t, d, r):
     h = d / r
     if t == 1:  # Spherical
@@ -41,6 +55,7 @@ def covar(t, d, r):
         c = cp.exp(-3 * cp.square(h))
     return c
 
+@nvtx.annotate("sortquad()", color="red")
 def sortQuadrantPoints(quad_array, quad_count, rad):
     quad_array['Dist'] = cp.linalg.norm(quad_array[["X","Y"]].values, axis = 1)
     quad_array = quad_array[quad_array.Dist < rad] # delete points outside of radius
@@ -48,7 +63,8 @@ def sortQuadrantPoints(quad_array, quad_count, rad):
     # select the number of points in each quadrant up to our quadrant count
     smallest = quad_array.iloc[:quad_count]
     return smallest
-    
+
+@nvtx.annotate("nearestNeighborSearch", color="blue")
 def nearestNeighborSearch(rad, count, loc, data):
     locx = loc[0]
     locy = loc[1]
@@ -131,6 +147,7 @@ def pred_grid(xmin, xmax, ymin, ymax, pix):
 
 
 # rotation matrix (Azimuth = major axis direction)
+@nvtx.annotate("Rot_mat", color="purple")
 def Rot_Mat(Azimuth, a_max, a_min):
     theta = (Azimuth / 180.0) * cp.pi
     Rot_Mat = cp.dot(
@@ -147,6 +164,7 @@ def Rot_Mat(Azimuth, a_max, a_min):
 
 
 # covariance model
+@nvtx.annotate("krig_cov", color="purple")
 def krig_cov(q, vario):
     # unpack variogram parameters
     Azimuth = vario[0]
@@ -169,6 +187,7 @@ def krig_cov(q, vario):
     return c
 
 # covariance model
+@nvtx.annotate("array_cov", color="purple")
 def array_cov(q1, q2, vario):
     # unpack variogram parameters
     Azimuth = vario[0]
@@ -375,7 +394,7 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
     """
     
     #print('right version')
-    
+    # vario = cp.asarray(vario)
     # generate random array for simulation order
     xyindex = np.arange(len(Pred_grid))
     random.Random(0).shuffle(xyindex) # random.shuffle(xyindex)
@@ -385,8 +404,8 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
     # preallocate space for simulation
     sgs = cp.zeros(shape=len(Pred_grid))
     
-    for i in tqdm(range(0, len(Pred_grid)), position=0, leave=True):
-    #for i in tqdm(range(0, 100), position=0, leave=True):
+    #for i in tqdm(range(0, len(Pred_grid)), position=0, leave=True):
+    for i in tqdm(range(0, 100), position=0, leave=True):
         z = xyindex[i]
 
         # convert data to numpy array for faster speeds/parsing
@@ -426,7 +445,7 @@ def sgsim(Pred_grid, df, xx, yy, data, k, vario, rad):
             
         #print(est.shape,var.shape)
 
-        sgs[z] = cp.random.normal(est,cp.sqrt(var),1) # simulate by randomly sampling a value
+       	sgs[z] = cp.random.normal(est,cp.sqrt(var),1) # simulate by randomly sampling a value
 
         # update the conditioning data
         coords = Pred_grid[z:z+1,:]
